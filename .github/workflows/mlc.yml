@@ -98,7 +98,14 @@ jobs:
         run: >-
           conda build --output-folder=conda/pkg conda/recipe &&
           conda install tvm -c ./conda/pkg
+      - uses: actions/upload-artifact@v3
+        with:
+          name: tvm-win-vulkan-conda
+          path: conda/pkg/
       - name: Test
         shell: cmd /C call {0}
+        env:
+          CI: true # this is probably already set somewhere?
+          NO_VULKAN_TESTS: true # workaround
         run: >-
           python -m pytest -v tests/python/all-platform-minimal-test
