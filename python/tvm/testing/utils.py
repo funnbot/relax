@@ -96,7 +96,7 @@ import tvm.contrib.hexagon._ci_env_check as hexagon
 from tvm.driver.tvmc.frontends import load_model
 from tvm.error import TVMError
 
-
+NO_VULKAN_TESTS = os.getenv("NO_VULKAN_TESTS", "").lower() in {"true", "1", "yes"}
 SKIP_SLOW_TESTS = os.getenv("SKIP_SLOW_TESTS", "").lower() in {"true", "1", "yes"}
 IS_IN_CI = os.getenv("CI", "") == "true"
 
@@ -420,6 +420,9 @@ def _get_targets(target_names=None):
             is_enabled = tvm.support.libinfo()["USE_HEXAGON"].lower() in ["on", "true", "1"]
             # If Hexagon has compile-time support, we can always fall back
             is_runnable = is_enabled and "ANDROID_SERIAL_NUMBER" in os.environ
+        elif target_kind == "vulkan" and NO_VULKAN_TESTS:
+            is_enabled = tvm.runtime.enabled(target_kind)
+            is_runnable = False
         else:
             is_enabled = tvm.runtime.enabled(target_kind)
             is_runnable = is_enabled and tvm.device(target_kind).exist
