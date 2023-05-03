@@ -32,6 +32,7 @@ cmake ^
       -DUSE_RANDOM=ON ^
       -DUSE_PROFILER=ON ^
       -DINSTALL_DEV=ON ^
+      -DUSE_VULKAN=ON ^
       %SRC_DIR%
 
 cd ..
