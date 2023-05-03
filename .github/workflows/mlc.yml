@@ -79,12 +79,18 @@ jobs:
           python -m pytest -v tests/python/contrib/test_rpc_server_device.py
 
   Windows:
-    if: ${{ github.repository == 'mlc-ai/relax' }}
+    if: ${{ github.repository == 'funnbot/relax' }}
     runs-on: windows-2019
     steps:
       - uses: actions/checkout@v2
         with:
           submodules: 'recursive'
+      - name: Prepare Vulkan SDK
+        uses: humbletim/setup-vulkan-sdk@v1.2.0
+        with:
+          vulkan-query-version: latest
+          vulkan-components: Vulkan-Headers, Vulkan-Loader, SPIRV-Headers, SPIRV-Tools
+          vulkan-use-cache: true
       - name: Set up environment
         uses: ./.github/actions/setup
       - name: Conda Build
