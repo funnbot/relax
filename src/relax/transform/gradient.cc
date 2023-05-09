@@ -25,6 +25,7 @@
  * with respect to the only return value of the function, which needs to be scalar.
  */
 
+#include <tvm/relax/attrs/op.h>
 #include <tvm/relax/expr_functor.h>
 #include <tvm/relax/nested_msg.h>
 #include <tvm/relax/op_attr_types.h>
@@ -106,24 +107,46 @@ class BackwardBindingGenerator : private ExprVisitor {
   // Handle the adjoint expr of the inputs of binding
   // For call node, we would call the registered gradient functions
   void VisitBinding_(const VarBindingNode* binding, const CallNode* call) final {
+    // Skip if it is not an Op
+    if (!call->op->IsInstance<OpNode>()) {
+      return;
+    }
+
     static const OpAttrMap<FPrimalGradient>& gradient_op_map =
         Op::GetAttrMap<FPrimalGradient>("FPrimalGradient");
+    static const constexpr char* te_grad_func_prefix = "tvm.relax.te_grad._register.";
 
     Var adjoint_var = adjoint_var_map_[binding->var];
     const Op& call_op = Downcast<Op>(call->op);
-    const Array<Expr>& partials =
-        gradient_op_map[call_op](binding->var, GetRef<Call>(call), adjoint_var, builder_);
-    ICHECK(partials.size() == call->args.size()) << "partials number != inputs number";
 
-    for (size_t i = 0; i < partials.size(); ++i) {
-      Expr partial = partials[i];
-      if (IsCallNoGrad(partial)) {  // no grad: don't update
-        continue;
+    if (call_op == Op::Get("relax.call_tir")) {
+      auto te_grad_name = call->attrs.as<CallTIRAttrs>()->te_grad_name;
+      if (te_grad_name) {
+        auto func = tvm::runtime::Registry::Get(te_grad_func_prefix + te_grad_name.value());
+        CHECK(func) << "te grad function " << te_grad_name.value() << " not registered";
+        Var result_var = (*func)(builder_, adjoint_var, GetRef<Call>(call));
+        Tuple args = Downcast<Tuple>(call->args[1]);
+        for (int i = 0; i < static_cast<int>(args->fields.size()); ++i) {
+          Expr partial = TupleGetItem(result_var, i);
+          UpdateStructInfo(partial, GetStructInfo(args->fields[i]));
+          UpdateAdjoint(args->fields[i], partial);
+        }
+      } else {
+        LOG(FATAL) << "Differentiation of call_tir op without te_grad_name is not supported yet.";
       }
-      if (!partial->struct_info_.defined()) {
-        UpdateStructInfo(partial, GetStructInfo(call->args[i]));
+    } else {
+      Array<Expr> partials =
+          gradient_op_map[call_op](binding->var, GetRef<Call>(call), adjoint_var, builder_);
+      ICHECK(partials.size() == call->args.size()) << "partials number != inputs number";
+      for (size_t i = 0; i < partials.size(); ++i) {
+        if (IsCallNoGrad(partials[i])) {  // no grad: don't update
+          continue;
+        }
+        if (!partials[i]->struct_info_.defined()) {
+          UpdateStructInfo(partials[i], GetStructInfo(call->args[i]));
+        }
+        UpdateAdjoint(call->args[i], partials[i]);
       }
-      UpdateAdjoint(call->args[i], partial);
     }
   }
 
@@ -335,7 +358,8 @@ class GradientMutator : private ExprMutator {
     GradientMutator mutator(mod, require_grads_value, target_index);
     Function new_func_transformed = Downcast<Function>(mutator.VisitExpr(new_func));
 
-    IRModule new_module = GetRef<IRModule>(mod.CopyOnWrite());
+    IRModule new_module = mutator.GetContextIRModule();
+    new_module.CopyOnWrite();
     new_module->Add(GlobalVar(func_name + "_adjoint"), new_func_transformed);
     return new_module;
   }
@@ -343,6 +367,8 @@ class GradientMutator : private ExprMutator {
  private:
   GradientMutator(const IRModule& module, const Array<Var>& require_grads, int target_index)
       : ExprMutator(module), require_grads_(require_grads), target_index_(target_index) {}
+
+  IRModule GetContextIRModule() const { return builder_->GetContextIRModule(); }
 
   Expr VisitExpr_(const FunctionNode* func) final {
     CHECK(func->body->IsInstance<SeqExprNode>()) << "The body of the function must be SeqExpr.";
